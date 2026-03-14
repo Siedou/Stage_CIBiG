@@ -1,0 +1,259 @@
+---
+title: "Rappot_Stage_CIBiG"
+author: "SORY"
+date: "2026-02-06"
+output: pdf_document
+---
+
+##1.       Transfert des reads du Burkina dans mon /scratch
+
+rsync -avh --progress Igname_Burkina /data/sory_Yamdiv/00_RAW_DATA
+
+##2.       Contrôle de quality des reads du Burkina avec FastQc
+
+·    #  Vérification de la présence du logiciel  et chargement des logiciels FastQC et MultiQC
+
+module list
+
+    module load FastQC/0.12.1
+
+   module load MultiQC/1.9
+
+·    #   Création d’un dossier QC_reads et lancement du contrôle
+
+   mkdir QC_reads
+
+   fastqc \*.fq.gz -o QC_reads -t 8
+
+##3.       Exportation des fichiers html pour visualisation
+
+rsync -avh --progress QC_reads storage:
+
+##4.       Fusion des reads les R1 ensembles et les R2 ensembles pour chaque reads
+
+ cat CR5859\_\*\_R1.fq.gz \> /data/sory_Yamdiv/00_RAW_DATA/Burkina_merged/CR5859_R1.fq.gz
+
+cat CR5859\_\*\_R2.fq.gz \> /data/sory_Yamdiv/00_RAW_DATA/Burkina_merged/CR5859_R2.fq.gz
+
+##5.       Téléchargement de des SRA
+
+**#SraAccList.txt était en format Windows**. Conversion en format Linux
+
+**cat -A SraAccList.txt** pour voir la liste des SRA
+
+#résultat : SRR8451303\^M\$
+
+**sed -i 's/\\r\$//' SraAccList.txt** #pour corriger le format (Supprime les \^M (CRLF) à la fin des lignes)
+
+**cat -A SraAccList.txt** pour voir
+
+#Résultat : SRR8451303\$  SRR8451304\$
+
+**sbatch script_dawload_sra_QcN.sh** pour lancer le téléchargement
+
+#après le téléchargement, nous avons deplacer l’ensemble des fastq.gz dans un seul dossier #avec la commande : find . -type f -name "\*.fastq.gz" -exec mv {} fastq/ \\;
+
+#we have doxload the file of metadata and we use this command to transfert on the cluster
+
+scp -o "ProxyJump sory\@160.120.108.164" /home/siedou/test_renom_SRA.csv sory\@node04:/scratch/sory_yamdiv/Africrop/
+
+#we writed the command to renamed_fastq whith this command :
+
+awk -F';' '{print "cp" ,\$2,"\_1.fq.gz ",\$1}' test_renom_SRA.csv \| head
+
+awk -F';' 'NR\>1 {  
+
+ print "cp",\$2"\_1.fastq.gz",\$1"\_R1.fastq.gz";  
+
+ print "cp",\$2"\_2.fastq.gz",\$1"\_R2.fastq.gz"
+
+}' test_renom_SRA.csv \| head
+
+#The final test, we are defined the source of file and destination of file
+
+SRC="/scratch/sory_yamdiv/Africrop/SRA/fastq"
+
+DEST="/scratch/sory_yamdiv/Africrop/renamed_fastq"
+
+#We have integre the SRC and DEST in the command
+
+awk -F';' -v src="\$SRC" -v dest="\$DEST" 'NR\>1 {\
+    printf "cp \\"%s/%s_1.fastq.gz\\" \\"%s/%s_R1.fastq.gz\\"\\n",src,\$2,dest,\$1;\
+    printf "cp \\"%s/%s_2.fastq.gz\\" \\"%s/%s_R2.fastq.gz\\"\\n",src,\$2,dest,\$1\
+}' test_renom_SRA.csv \| head
+
+**##6.       Après merged contrôle de qualité**
+
+    module load FastQC/0.12.1
+
+   module load MultiQC/1.9
+
+#Création d’un dossier fastqc_results et lancement du contrôle
+
+mkdir fastqc_results
+
+fastqc \*.fq.gz  -o fastqc_results -t 8
+
+multiqc  -o fastqc_results
+
+#exportation des résultats sur le PC
+
+rsync -avz -e "ssh -J sory\@160.120.108.164" \\
+
+sory\@node04:/scratch/sory_yamdiv/Burkina_merged/fastqc_results .
+
+##7.       Triming des échantillons du Burkina Faso
+
+#L’élimination des adaptateurs à été fait par cutadapt
+
+module load cutadapt/4.5
+
+**sbatch cutadapt.sh** éliminer les adaptateurs
+
+**Contenu du script**
+
+#!/bin/bash
+
+module load cutadapt/4.5
+
+ADAPT_R1=AGATCGGAAGAGCACACGTCTGAACTCCAGTCA
+
+ADAPT_R2=AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT
+
+for sample in CR5858 CR5859 CR5860 CR5861 CR5862 CR5863
+
+do
+
+  echo "Traitement de \$sample"
+
+  cutadapt \\
+
+    -a \$ADAPT_R1 \\
+
+    -A \$ADAPT_R2 \\
+
+    -q 20,20 \\
+
+    -m 30 \\
+
+    -o \${sample}\_R1.trimmed.fq.gz \\
+
+    -p \${sample}\_R2.trimmed.fq.gz \\
+
+    \${sample}\_R1.fq.gz \\
+
+    \${sample}\_R2.fq.gz
+
+done
+
+##8.       Maping
+
+#Il a été fait à l’aide d’un script
+
+**Sbatch bon_test_maping.sh**
+
+**Contenu du script**
+
+#!/bin/bash
+
+#SBATCH --job-name=map_all_CR58
+
+#SBATCH --output=map_all_CR58.out
+
+#SBATCH --error=map_all_CR58.err
+
+#SBATCH --time=148:00:00
+
+#SBATCH --cpus-per-task=8
+
+#SBATCH --mem=32G
+
+#SBATCH --partition=normal
+
+module load bwa
+
+module load samtools
+
+REF=GCF_009730915.1_TDr96_F1_v2_PseudoChromosome.rev07_lg8_w22_25.fasta_genomic.fna
+
+THREADS=8
+
+MEM_PER_THREAD=3G   \# pour samtools sort
+
+\# Index reference si besoin
+
+if [ ! -f "\${REF}.bwt" ]; then
+
+    echo "Indexing reference..."
+
+    bwa index \$REF
+
+fi
+
+\# Boucle sur tous les R1
+
+for R1 in \*\_R1.fq.gz; do
+
+    \# Déduire le nom de l'échantillon
+
+    SAMPLE=\${R1%\_R1.fq.gz}
+
+    R2=\${SAMPLE}\_R2.fq.gz
+
+    OUT=\${SAMPLE}
+
+    echo "=============================="
+
+    echo "Mapping sample: \$SAMPLE"
+
+    echo "R1: \$R1"
+
+    echo "R2: \$R2"
+
+    echo "Output: \${OUT}\_sorted.bam"
+
+    echo "=============================="
+
+    \# Mapping + tri
+
+    bwa mem -t \$THREADS -R "\@RG\\tID:\${OUT}\\tSM:\${OUT}\\tPL:ILLUMINA" \$REF \$R1 \$R2 \| \\
+
+    samtools sort -\@ \$THREADS -m \$MEM_PER_THREAD -o \${OUT}\_sorted.bam -
+
+    \# Index BAM
+
+    samtools index \${OUT}\_sorted.bam
+
+    \# Flagstat
+
+    samtools flagstat \${OUT}\_sorted.bam \> \${OUT}\_flagstat.txt
+
+    echo "Sample \$SAMPLE mapping completed!"
+
+done
+
+echo "All samples processed!"
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
